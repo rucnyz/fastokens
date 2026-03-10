@@ -111,9 +111,6 @@ def _launch_dynamo(
 
     backend_env = os.environ.copy()
     backend_env["DYN_SYSTEM_PORT"] = str(_DEFAULT_SYSTEM_PORT)
-    backend_env["DYN_SGL_USE_TOKENIZER"] = "1"
-    if patched:
-        backend_env["DYN_USE_FASTOKENS"] = "1"
 
     backend_log = open(backend_log_path, "w")
     backend_proc = subprocess.Popen(
@@ -130,6 +127,8 @@ def _launch_dynamo(
         "--http-port", str(port),
         "--discovery-backend", "file",
     ]
+    if patched:
+        frontend_cmd.extend(["--tokenizer", "fastokens"])
 
     frontend_env = os.environ.copy()
     frontend_env["DYN_SYSTEM_STARTING_HEALTH_STATUS"] = "notready"
@@ -589,8 +588,12 @@ def _run_tokenize_bench(
     prompts: list[tuple[str, str]],
     *,
     use_fastokens: bool = False,
+    batch_size: int = 1,
 ) -> tuple[dict[str, float], list[float]]:
     """Benchmark tokenization speed only (no server).
+
+    When *batch_size* > 1, prompts are encoded in batches using the
+    tokenizer's built-in batch encoding for realistic throughput measurement.
 
     Returns (metrics, per_prompt_latencies) in the same shape as _run_bench.
     """
@@ -603,17 +606,26 @@ def _run_tokenize_bench(
     tokenizer = AutoTokenizer.from_pretrained(model)
 
     total = len(prompts)
+    texts = [sys_text + user_text for sys_text, user_text in prompts]
+
+    # Warmup: initialize thread pool before timing (use dummy text to avoid
+    # polluting the tokenizer cache with benchmark inputs).
+    tokenizer(["warmup " * 50])
+
     per_prompt_latencies: list[float] = []
     total_tokens = 0
 
     t_start = time.perf_counter()
-    for idx, (sys_text, user_text) in enumerate(prompts):
+    for i in range(0, total, batch_size):
+        batch = texts[i : i + batch_size]
         t0 = time.perf_counter()
-        ids = tokenizer.encode(sys_text + user_text)
+        encodings = tokenizer(batch)
         latency = (time.perf_counter() - t0) * 1000
-        per_prompt_latencies.append(latency)
-        total_tokens += len(ids)
-        _print_progress(idx + 1, total, 0)
+        per_prompt = latency / len(batch)
+        for enc in encodings:
+            total_tokens += len(enc)
+            per_prompt_latencies.append(per_prompt)
+        _print_progress(min(i + batch_size, total), total, 0)
     print()
     duration_s = time.perf_counter() - t_start
 
@@ -939,6 +951,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"\n  [BASELINE] Tokenizing {len(bench_prompts)} prompts (stock tokenizer)...")
             baseline_metrics, baseline_latencies = _run_tokenize_bench(
                 args.model, bench_prompts, use_fastokens=False,
+                batch_size=args.batch_size,
             )
             _print_run_summary("BASELINE", baseline_metrics)
 
@@ -946,6 +959,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"\n  [FASTOKENS] Tokenizing {len(bench_prompts)} prompts (fastokens)...")
             patched_metrics, patched_latencies = _run_tokenize_bench(
                 args.model, bench_prompts, use_fastokens=True,
+                batch_size=args.batch_size,
             )
             _print_run_summary("FASTOKENS", patched_metrics)
 
