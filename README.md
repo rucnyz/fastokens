@@ -3,14 +3,6 @@
 fastokens is a fast [BPE](https://en.wikipedia.org/wiki/Byte_pair_encoding) tokenizer for use with
 popular open-weight LLMs, built on top of a high-performance Rust backend.
 
-```python
-from fastokens import Tokenizer
-
-tokenizer = Tokenizer.from_model("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
-tokens = tokenizer.encode("Hello, world!")
-assert tokens == [22177, 1044, 4304, 1033]
-```
-
 `fastokens` can be installed from source:
 ```
 git clone https://github.com/atero-ai/fast-tokens
@@ -24,7 +16,7 @@ The Python API lives in the `python` directory. To use `fastokens` as a drop-in 
 
 ## Performance
 
-`fastokens` on average achieves a 4.5x faster tokenization compared to the `tokenizers` library.
+`fastokens` on average achieves a 10x+ faster tokenization compared to the `tokenizers` library.
 The gap widens as prompt sizes scale, as shown in the graphs below.
 
 ![NVIDIA Nemotron buckets](assets/nvidia_nemotron_buckets_plots.png)
@@ -35,43 +27,8 @@ Faster tokenization directly impacts live workloads. Tested using SGLang's bench
 
 ![sglang benchmark TTFT comparison](assets/sglang_benchmark_ttft_comparison.png)
 
-The speedup comes from four categories of optimization:
-
-1) **An alternative BPE algorithm** from [GitHub's rust-gems](https://github.com/github/rust-gems/tree/main/crates/bpe).
-   The standard BPE implementation uses a priority-queue-based merge algorithm that iteratively
-   merges the highest-priority pair in a doubly-linked list — O(n log n) per word with significant
-   bookkeeping. `fastokens` replaces this with a greedy left-to-right scan backed by an
-   Aho-Corasick automaton over the full vocabulary. A precomputed compatibility check determines
-   whether two adjacent tokens are consistent with what BPE would produce, and a next-prefix map
-   allows O(1) backtracking when the greedy choice fails. The result: no priority queue, no
-   linked-list mutations, and cache-friendly memory access.
-
-2) **Parallelization of tokenization across CPU cores.**
-   Pre-tokenization often produces thousands of splits (one per regex match). `fastokens` processes
-   these splits in parallel using Rayon, chunking them into groups of 16,384 for a good balance
-   between parallelism overhead and work granularity. A callback-based `for_each_match` API on the
-   `Pattern` trait avoids collecting intermediate results into a `Vec`. Where possible, a standard
-   `regex` DFA is used in place of `fancy-regex`, avoiding the overhead of lookahead/lookbehind
-   support when the pattern doesn't need it.
-
-3) **A faster cache.**
-   The standard BPE caches intermediate `Word` representations and must iterate through a
-   linked-list structure to extract token IDs on every hit. `fastokens` caches the final
-   `Vec<u32>` of token IDs directly — a cache hit returns exactly what the caller needs with no
-   post-processing.
-
-4) **Reduced heap string allocations.**
-   All normalised content is stored in a single `String` buffer, with splits represented as
-   `Range<usize>` indices rather than separately heap-allocated strings. For a document that
-   produces 1,000 splits, that's 1 allocation instead of 1,000. The normalization step returns
-   `Cow<'a, str>`, so when normalization is a no-op (the common case), zero additional allocations
-   are made.
-
 Note that `fastokens` is focused on inference and does not support all features of `tokenizers`.
-In particular, decoding (converting tokens back to text), additional encoding outputs, and some
-normalizers/pretokenizers are not available. The original `tokenizers` package is used as a
-fallback for such cases, which we plan to make faster in the future.
-
+In particular, additional encoding outputs, and some normalizers/pretokenizers are not available.
 
 ## Tested models
 
@@ -107,4 +64,12 @@ from transformers import AutoTokenizer
 tokenizer = AutoTokenizer.from_pretrained("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
 tokens = tokenizer("Hello, world!")
 assert tokens["input_ids"] == [22177, 1044, 4304, 1033]
+```
+
+### Standalone usage
+
+```python
+from fastokens._native import Tokenizer
+tokenizer = Tokenizer.from_model("deepseek-ai/DeepSeek-V3.2")
+tokens = tokenizer.encode("A very long prompt that is now lightning fast.")
 ```

@@ -148,6 +148,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Run full Dynamo server benchmarks (not just tokenize-only)",
     )
     parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use dynamo.mocker instead of dynamo.sglang as the backend",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
@@ -207,6 +212,8 @@ def main(argv: list[str] | None = None) -> None:
             cmd.extend(["--shared-prefix", str(sp)])
         if not args.dynamo:
             cmd.append("--tokenize-only")
+        if args.mock:
+            cmd.append("--mock")
         if server_extra:
             cmd.append("--")
             cmd.extend(server_extra)

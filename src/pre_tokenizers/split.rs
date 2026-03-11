@@ -68,8 +68,17 @@ impl Clone for Pcre2Regex {
 /// Parallel matching triggers when the input is >= 2 × this value (i.e. 16 KB).
 const MIN_CHUNK_SIZE: usize = 8 * 1024;
 
-/// Maximum number of parallel chunks (and pre-compiled regex copies).
-const MAX_PARALLEL: usize = 16;
+/// Number of pre-compiled regex copies (one per potential parallel thread).
+/// Sized to the machine's available parallelism so that regex matching can
+/// scale across all cores.
+fn max_parallel() -> usize {
+    static CACHED: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    })
+}
 
 /// Overlap (bytes) appended to each parallel regex chunk.
 ///
@@ -186,8 +195,8 @@ impl TryFrom<SplitRaw> for Split {
 
     fn try_from(raw: SplitRaw) -> Result<Self, Error> {
         let source = raw.pattern.source();
-        let pcre2_regexes = try_compile_pcre2_regexes(&source, MAX_PARALLEL);
-        let regexes = compile_regexes(&source, MAX_PARALLEL)?;
+        let pcre2_regexes = try_compile_pcre2_regexes(&source, max_parallel());
+        let regexes = compile_regexes(&source, max_parallel())?;
         Ok(Self {
             id: SPLIT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             regexes,
@@ -206,9 +215,9 @@ impl Split {
     pub fn from_config(pattern: &Value, behavior: &str, invert: bool) -> Result<Self, Error> {
         let pattern: Pattern = serde_json::from_value(pattern.clone())?;
         let source = pattern.source();
-        let regexes = compile_regexes(&source, MAX_PARALLEL)?;
+        let regexes = compile_regexes(&source, max_parallel())?;
         let behavior: SplitBehavior = serde_json::from_value(Value::String(behavior.to_string()))?;
-        let pcre2_regexes = try_compile_pcre2_regexes(&source, MAX_PARALLEL);
+        let pcre2_regexes = try_compile_pcre2_regexes(&source, max_parallel());
         Ok(Self {
             id: SPLIT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             regexes,

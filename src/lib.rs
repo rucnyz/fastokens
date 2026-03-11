@@ -61,6 +61,9 @@ pub enum Error {
 
     #[error("decode error: {0}")]
     Decode(String),
+
+    #[error("invalid model identifier: {0}")]
+    InvalidIdentifier(String),
 }
 
 /// An LLM tokenizer backed by `tokenizer.json`.
@@ -139,6 +142,11 @@ impl Tokenizer {
     /// Download `tokenizer.json` from HuggingFace Hub for the given model (e.g.
     /// `"meta-llama/Llama-3.1-8B"`) and create a tokenizer with it.
     pub fn from_model(model: &str) -> Result<Self, Error> {
+        if model.contains("..") {
+            return Err(Error::InvalidIdentifier(
+                "model identifier must not contain \"..\"".into(),
+            ));
+        }
         let api = Api::new()?;
         let repo = api.model(model.to_string());
         let json_path = repo.get("tokenizer.json")?;
@@ -585,10 +593,10 @@ mod tests {
         "| col1 | col2 |\n|------|------|\n| a    | b    |",
     ];
 
-    /// Helper: compare encoding of every input in `corpus` between our
-    /// tokenizer and the HuggingFace tokenizer for a given model name.
+    /// Helper: compare both encoding and decoding of every input in `corpus`
+    /// between our tokenizer and the HuggingFace tokenizer for a given model.
     /// Returns a list of failure descriptions (empty = all passed).
-    fn compare_encode(
+    fn compare_encode_decode(
         model_name: &str,
         corpus: &[&str],
     ) -> Vec<String> {
@@ -599,11 +607,10 @@ mod tests {
 
         let mut failures = Vec::new();
         for &input in corpus {
-            let hf_ids = hf
+            let hf_enc = hf
                 .encode(input, false)
-                .unwrap_or_else(|e| panic!("{model_name}: HF encode({input:?}): {e}"))
-                .get_ids()
-                .to_vec();
+                .unwrap_or_else(|e| panic!("{model_name}: HF encode({input:?}): {e}"));
+            let hf_ids = hf_enc.get_ids().to_vec();
             let our_ids = match ours.encode(input) {
                 Ok(ids) => ids,
                 Err(e) => {
@@ -615,7 +622,7 @@ mod tests {
             };
             if our_ids != hf_ids {
                 failures.push(format!(
-                    "  mismatch on {input:?}: got {} tokens, expected {}\n\
+                    "  encode mismatch on {input:?}: got {} tokens, expected {}\n\
                      \x20   ours: {:?}\n\
                      \x20   hf:   {:?}",
                     our_ids.len(),
@@ -624,39 +631,16 @@ mod tests {
                     &hf_ids[..hf_ids.len().min(20)],
                 ));
             }
-        }
-        failures
-    }
 
-    /// Helper: compare decoding of round-tripped inputs between our tokenizer
-    /// and the HuggingFace tokenizer.
-    fn compare_decode(
-        model_name: &str,
-        corpus: &[&str],
-    ) -> Vec<String> {
-        let hf = tokenizers::Tokenizer::from_pretrained(model_name, None)
-            .unwrap_or_else(|e| panic!("{model_name}: HF load failed: {e}"));
-        let ours = Tokenizer::from_model(model_name)
-            .unwrap_or_else(|e| panic!("{model_name}: fastokens load failed: {e}"));
-
-        let mut failures = Vec::new();
-        for &input in corpus {
-            if input.is_empty() {
+            // Decode comparison (skip empty inputs / empty token sequences).
+            if input.is_empty() || hf_ids.is_empty() {
                 continue;
             }
-            let hf_enc = match hf.encode(input, false) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let ids = hf_enc.get_ids();
-            if ids.is_empty() {
-                continue;
-            }
-            let hf_decoded = match hf.decode(ids, false) {
+            let hf_decoded = match hf.decode(&hf_ids, false) {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let our_decoded = match ours.decode(ids, false) {
+            let our_decoded = match ours.decode(&hf_ids, false) {
                 Ok(d) => d,
                 Err(e) => {
                     failures.push(format!(
@@ -682,64 +666,44 @@ mod tests {
 
     #[test]
     fn correctness_minimax_m2_1() {
-        let f = compare_encode("MiniMaxAI/MiniMax-M2.1", CORPUS);
+        let f = compare_encode_decode("MiniMaxAI/MiniMax-M2.1", CORPUS);
         assert!(f.is_empty(), "MiniMaxAI/MiniMax-M2.1:\n{}", f.join("\n"));
     }
 
     #[test]
     fn correctness_nemotron() {
-        let f = compare_encode("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", CORPUS);
+        let f = compare_encode_decode("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", CORPUS);
         assert!(f.is_empty(), "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16:\n{}", f.join("\n"));
     }
 
     #[test]
     fn correctness_deepseek_v3_2() {
-        let f = compare_encode("deepseek-ai/DeepSeek-V3.2", CORPUS);
+        let f = compare_encode_decode("deepseek-ai/DeepSeek-V3.2", CORPUS);
         assert!(f.is_empty(), "deepseek-ai/DeepSeek-V3.2:\n{}", f.join("\n"));
     }
 
     #[test]
     fn correctness_gpt_oss() {
-        let f = compare_encode("openai/gpt-oss-120b", CORPUS);
+        let f = compare_encode_decode("openai/gpt-oss-120b", CORPUS);
         assert!(f.is_empty(), "openai/gpt-oss-120b:\n{}", f.join("\n"));
     }
 
     #[test]
     fn correctness_qwen3() {
-        let f = compare_encode("Qwen/Qwen3-0.6B", CORPUS);
+        let f = compare_encode_decode("Qwen/Qwen3-0.6B", CORPUS);
         assert!(f.is_empty(), "Qwen/Qwen3-0.6B:\n{}", f.join("\n"));
     }
 
     #[test]
     fn correctness_mistral_nemo() {
-        let f = compare_encode("mistralai/Mistral-Nemo-Instruct-2407", CORPUS);
+        let f = compare_encode_decode("mistralai/Mistral-Nemo-Instruct-2407", CORPUS);
         assert!(f.is_empty(), "mistralai/Mistral-Nemo-Instruct-2407:\n{}", f.join("\n"));
     }
 
     #[test]
     fn correctness_qwen3_nemotron() {
-        let f = compare_encode("nvidia/Qwen3-Nemotron-235B-A22B-GenRM", CORPUS);
+        let f = compare_encode_decode("nvidia/Qwen3-Nemotron-235B-A22B-GenRM", CORPUS);
         assert!(f.is_empty(), "nvidia/Qwen3-Nemotron-235B-A22B-GenRM:\n{}", f.join("\n"));
-    }
-
-    // ── Per-model decode correctness ─────────────────────────────────
-
-    #[test]
-    fn decode_correctness_minimax() {
-        let f = compare_decode("MiniMaxAI/MiniMax-M2.1", CORPUS);
-        assert!(f.is_empty(), "MiniMaxAI/MiniMax-M2.1 decode:\n{}", f.join("\n"));
-    }
-
-    #[test]
-    fn decode_correctness_nemotron() {
-        let f = compare_decode("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", CORPUS);
-        assert!(f.is_empty(), "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 decode:\n{}", f.join("\n"));
-    }
-
-    #[test]
-    fn decode_correctness_deepseek() {
-        let f = compare_decode("deepseek-ai/DeepSeek-V3.2", CORPUS);
-        assert!(f.is_empty(), "deepseek-ai/DeepSeek-V3.2 decode:\n{}", f.join("\n"));
     }
 
     // ── Cache consistency ────────────────────────────────────────────
@@ -810,7 +774,7 @@ mod tests {
             "<file> is not <filename>",
             "<fim_prefix>code here<fim_suffix>more code<fim_middle>",
         ];
-        let f = compare_encode("MiniMaxAI/MiniMax-M2.1", corpus);
+        let f = compare_encode_decode("MiniMaxAI/MiniMax-M2.1", corpus);
         assert!(f.is_empty(), "MiniMaxAI/MiniMax-M2.1 added tokens:\n{}", f.join("\n"));
     }
 
@@ -824,7 +788,7 @@ mod tests {
             "Normal text without special tokens",
             "<|tool▁calls▁begin|>call<|tool▁calls▁end|>",
         ];
-        let f = compare_encode("deepseek-ai/DeepSeek-V3.2", corpus);
+        let f = compare_encode_decode("deepseek-ai/DeepSeek-V3.2", corpus);
         assert!(f.is_empty(), "deepseek-ai/DeepSeek-V3.2 added tokens:\n{}", f.join("\n"));
     }
 
@@ -837,7 +801,7 @@ mod tests {
             "<|endoftext|>",
             "Plain text with no special tokens at all.",
         ];
-        let f = compare_encode("Qwen/Qwen3-0.6B", corpus);
+        let f = compare_encode_decode("Qwen/Qwen3-0.6B", corpus);
         assert!(f.is_empty(), "Qwen/Qwen3-0.6B added tokens:\n{}", f.join("\n"));
     }
 
@@ -851,7 +815,7 @@ mod tests {
             "<|start_header_id|>user<|end_header_id|>\n\nHi!<|eot_id|>",
             "No special tokens here.",
         ];
-        let f = compare_encode("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", corpus);
+        let f = compare_encode_decode("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", corpus);
         assert!(f.is_empty(), "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 added tokens:\n{}", f.join("\n"));
     }
 
@@ -931,7 +895,6 @@ mod tests {
                     let ctx = item.get("context")?.as_str()?;
                     if ctx.is_empty() { None } else { Some(ctx.to_string()) }
                 })
-                .take(100)
                 .collect();
 
             // ShareGPT52K: first 1000 samples
@@ -954,24 +917,26 @@ mod tests {
                         .collect();
                     if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
                 })
-                .take(1000)
                 .collect();
 
             ExtendedCorpus { longbench, sharegpt }
         })
     }
 
-    /// Compare encoding in batches of `batch_size` using encode_batch.
-    fn compare_encode_batched(
+    /// Compare encoding and decoding in batches using encode_batch.
+    fn compare_encode_decode_batched(
         model_name: &str,
         corpus: &[String],
         batch_size: usize,
+        progress: bool,
     ) -> Vec<String> {
         let hf = tokenizers::Tokenizer::from_pretrained(model_name, None)
             .unwrap_or_else(|e| panic!("{model_name}: HF load failed: {e}"));
         let ours = Tokenizer::from_model(model_name)
             .unwrap_or_else(|e| panic!("{model_name}: fastokens load failed: {e}"));
 
+        let total = corpus.len();
+        let mut processed = 0usize;
         let mut failures = Vec::new();
         for chunk in corpus.chunks(batch_size) {
             let hf_results: Vec<Vec<u32>> = chunk
@@ -993,34 +958,80 @@ mod tests {
             };
 
             for (i, (hf_ids, our_ids)) in hf_results.iter().zip(our_results.iter()).enumerate() {
+                let input = &chunk[i];
+                let input_preview = {
+                    let mut end = input.len().min(80);
+                    while end < input.len() && !input.is_char_boundary(end) {
+                        end += 1;
+                    }
+                    &input[..end]
+                };
+
                 if our_ids != hf_ids {
-                    let input = &chunk[i];
                     failures.push(format!(
-                        "  mismatch on {:?}: got {} tokens, expected {}\n\
+                        "  encode mismatch on {:?}: got {} tokens, expected {}\n\
                          \x20   ours: {:?}\n\
                          \x20   hf:   {:?}",
-                        {
-                            let mut end = input.len().min(80);
-                            while end < input.len() && !input.is_char_boundary(end) {
-                                end += 1;
-                            }
-                            &input[..end]
-                        },
+                        input_preview,
                         our_ids.len(),
                         hf_ids.len(),
                         &our_ids[..our_ids.len().min(20)],
                         &hf_ids[..hf_ids.len().min(20)],
                     ));
                 }
+
+                // Decode comparison.
+                if hf_ids.is_empty() || input.is_empty() {
+                    continue;
+                }
+                let hf_decoded = match hf.decode(hf_ids, false) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let our_decoded = match ours.decode(hf_ids, false) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        failures.push(format!(
+                            "  decode error on {input_preview:?}: {e}"
+                        ));
+                        continue;
+                    }
+                };
+                if our_decoded != hf_decoded {
+                    failures.push(format!(
+                        "  decode mismatch on {input_preview:?}:\n\
+                         \x20   ours: {:?}\n\
+                         \x20   hf:   {:?}",
+                        &our_decoded[..our_decoded.len().min(100)],
+                        &hf_decoded[..hf_decoded.len().min(100)],
+                    ));
+                }
             }
+            processed += chunk.len();
+            if progress {
+                eprint!(
+                    "\r  {model_name}: {processed}/{total} ({:.0}%)",
+                    processed as f64 / total as f64 * 100.0,
+                );
+            }
+        }
+        if progress {
+            eprintln!();
         }
         failures
     }
 
     fn run_extended(model_name: &str) {
+        let progress = std::env::var("EXTENDED_PROGRESS").is_ok();
         let corpus = extended_corpus();
-        let mut failures = compare_encode_batched(model_name, &corpus.longbench, 10);
-        failures.extend(compare_encode_batched(model_name, &corpus.sharegpt, 10));
+        if progress {
+            eprintln!("  {model_name}: longbench ({} samples)", corpus.longbench.len());
+        }
+        let mut failures = compare_encode_decode_batched(model_name, &corpus.longbench, 10, progress);
+        if progress {
+            eprintln!("  {model_name}: sharegpt ({} samples)", corpus.sharegpt.len());
+        }
+        failures.extend(compare_encode_decode_batched(model_name, &corpus.sharegpt, 10, progress));
         assert!(
             failures.is_empty(),
             "{model_name} extended ({} failures):\n{}",
@@ -1070,4 +1081,17 @@ mod tests {
     fn extended_qwen3_nemotron() {
         run_extended("nvidia/Qwen3-Nemotron-235B-A22B-GenRM");
     }
+
+    #[test]
+    #[ignore]
+    fn extended_mistral_large() {
+        run_extended("mistralai/Mistral-Large-3-675B-Instruct-2512");
+    }
+
+    #[test]
+    #[ignore]
+    fn extended_qwen_small() {
+        run_extended("Qwen/Qwen3-0.6B");
+    }
+
 }

@@ -254,6 +254,8 @@ impl FlatCache {
             let slot = unsafe { self.slots.get_unchecked(idx) };
             let h = slot.hash;
             if h == EMPTY_SLOT {
+                let Ok(len) = u16::try_from(ids.len()) else { return };
+                let Ok(key_len) = u16::try_from(key_bytes.len()) else { return };
                 self.count += 1;
                 let offset = self.pool.len() as u32;
                 self.pool.extend_from_slice(ids);
@@ -262,20 +264,21 @@ impl FlatCache {
                 let slot = unsafe { self.slots.get_unchecked_mut(idx) };
                 slot.hash = hash;
                 slot.offset = offset;
-                slot.len = ids.len() as u16;
+                slot.len = len;
                 slot.key_offset = key_offset;
-                slot.key_len = key_bytes.len() as u16;
+                slot.key_len = key_len;
                 return;
             }
             if h == hash {
                 let ks = slot.key_offset as usize;
                 let ke = ks + slot.key_len as usize;
                 if unsafe { self.key_pool.get_unchecked(ks..ke) } == key_bytes {
+                    let Ok(len) = u16::try_from(ids.len()) else { return };
                     let offset = self.pool.len() as u32;
                     self.pool.extend_from_slice(ids);
                     let slot = unsafe { self.slots.get_unchecked_mut(idx) };
                     slot.offset = offset;
-                    slot.len = ids.len() as u16;
+                    slot.len = len;
                     return;
                 }
             }
@@ -714,8 +717,12 @@ impl Bpe {
             .map_err(|e| format!("error building DAAC: {e}"))?;
 
         let token_lens: Vec<u16> = (0..=max_token)
-            .map(|t| vocab_r[&t].len() as u16)
-            .collect();
+            .map(|t| {
+                u16::try_from(vocab_r[&t].len()).map_err(|_| {
+                    format!("token {t} length {} exceeds u16::MAX", vocab_r[&t].len())
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let next_prefix_map: Vec<TokenId> = (0..=max_token)
             .map(|token| {

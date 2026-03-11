@@ -69,7 +69,11 @@ def _wait_healthy(base_url: str, timeout: int, log_paths: list[str]) -> bool:
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 body = json.loads(resp.read())
-                if len(body.get("instances")) == _LAUNCHED_INSTANCES_COUNT:
+                generate_instances = [
+                    inst for inst in body.get("instances", [])
+                    if inst.get("endpoint") == "generate"
+                ]
+                if len(generate_instances) == _LAUNCHED_INSTANCES_COUNT:
                     return True
         except (urllib.error.URLError, OSError, ValueError, KeyError):
             pass
@@ -95,16 +99,33 @@ def _launch_dynamo(
     port: int,
     *,
     patched: bool = False,
+    mock: bool = False,
     extra_args: list[str] | None = None,
     frontend_log_path: str,
     backend_log_path: str,
 ) -> tuple[subprocess.Popen, subprocess.Popen]:
-    """Launch a Dynamo frontend + SGLang backend pair."""
-    # --- Backend (SGLang via dynamo) ---
+    """Launch a Dynamo frontend + backend pair.
+
+    Starts ``nats-server`` and ``etcd`` in the background.
+    When *mock* is True, uses ``dynamo.mocker`` instead of ``dynamo.sglang``.
+    """
+    # --- Infrastructure (NATS + etcd) ---
+    nats_proc = subprocess.Popen(
+        ["nats-server", "-js"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    _active_procs.append(nats_proc)
+
+    etcd_proc = subprocess.Popen(
+        ["etcd"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    _active_procs.append(etcd_proc)
+
+    time.sleep(2)  # let NATS + etcd bind their ports
+
+    backend_module = "dynamo.mocker" if mock else "dynamo.sglang"
     backend_cmd = [
-        sys.executable, "-m", "dynamo.sglang",
+        sys.executable, "-m", backend_module,
         "--model-path", model,
-        "--discovery-backend", "file",
     ]
     if extra_args:
         backend_cmd.extend(extra_args)
@@ -125,7 +146,6 @@ def _launch_dynamo(
     frontend_cmd = [
         sys.executable, "-m", "dynamo.frontend",
         "--http-port", str(port),
-        "--discovery-backend", "file",
     ]
     if patched:
         frontend_cmd.extend(["--tokenizer", "fastokens"])
@@ -891,6 +911,10 @@ def main(argv: list[str] | None = None) -> None:
              "10%% are unique suffix. Requires --input-len or --input-distribution.",
     )
     parser.add_argument(
+        "--mock", action="store_true",
+        help="Use dynamo.mocker instead of dynamo.sglang as the backend",
+    )
+    parser.add_argument(
         "--tokenize-only", action="store_true",
         help="Compare tokenization speed only (stock vs fastokens), "
              "without launching any servers",
@@ -917,9 +941,8 @@ def main(argv: list[str] | None = None) -> None:
             dataset, args.num_prompts + args.warmup, args.min_input_len,
             args.dataset,
         )
-    warmup_prompts: list[tuple[str, str]] = [("", p) for p in all_prompts[: args.warmup]]
-    source_prompts = all_prompts[args.warmup :]
-    print(f"  {len(source_prompts)} source prompts + {len(warmup_prompts)} warmup prompts")
+    source_prompts = all_prompts
+    print(f"  {len(source_prompts)} source prompts")
 
     # Create adjusted prompts for each bucket (truncated or repeated to fit).
     if args.input_len is not None:
@@ -939,6 +962,13 @@ def main(argv: list[str] | None = None) -> None:
             args.model, source_prompts,
             shared_prefix=args.shared_prefix,
         )
+
+    # Warmup prompts are drawn from the length-adjusted bench prompts so they
+    # respect --input-len and don't exceed the model's context window.
+    warmup_prompts = bench_prompts[: args.warmup]
+    bench_prompts = bench_prompts[args.warmup :]
+    bucket_indices = bucket_indices[args.warmup :]
+    print(f"  {len(bench_prompts)} bench prompts + {len(warmup_prompts)} warmup prompts")
 
     # ---- Tokenize-only mode: compare tokenizers without servers ----
     if args.tokenize_only:
@@ -1026,7 +1056,7 @@ def main(argv: list[str] | None = None) -> None:
         os.close(be_fd)
 
         frontend_proc, backend_proc = _launch_dynamo(
-            args.model, port, patched=patched,
+            args.model, port, patched=patched, mock=args.mock,
             extra_args=server_extra or None,
             frontend_log_path=fe_log,
             backend_log_path=be_log,

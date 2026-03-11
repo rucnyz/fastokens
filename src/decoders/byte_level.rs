@@ -28,19 +28,19 @@ impl ByteLevelDecoder {
     /// reverse GPT-2 table, and interprets the bytes as UTF-8.
     pub fn decode_chain(&self, tokens: Vec<String>) -> Vec<String> {
         let joined: String = tokens.into_iter().collect();
-        let bytes: Vec<u8> = joined
-            .chars()
-            .map(|c| {
-                let cp = c as usize;
-                if cp < CHAR_TO_BYTE.len() {
-                    CHAR_TO_BYTE[cp]
-                } else {
-                    // Characters outside the GPT-2 table are kept as-is
-                    // (shouldn't happen for well-formed tokens).
-                    b'?'
-                }
-            })
-            .collect();
+        let mut bytes: Vec<u8> = Vec::with_capacity(joined.len());
+        for c in joined.chars() {
+            let cp = c as usize;
+            if cp < CHAR_TO_BYTE.len() {
+                bytes.push(CHAR_TO_BYTE[cp]);
+            } else {
+                // Characters outside the GPT-2 table (e.g. ｜ U+FF5C, ▁ U+2581
+                // in DeepSeek tokens): preserve their original UTF-8 encoding.
+                let mut buf = [0u8; 4];
+                let s = c.encode_utf8(&mut buf);
+                bytes.extend_from_slice(s.as_bytes());
+            }
+        }
         vec![String::from_utf8_lossy(&bytes).into_owned()]
     }
 }
@@ -75,5 +75,17 @@ mod tests {
             .collect();
         let result = dec.decode_chain(vec![encoded]);
         assert_eq!(result, vec!["€"]);
+    }
+
+    #[test]
+    fn non_gpt2_chars_preserved() {
+        let dec = ByteLevelDecoder;
+        // DeepSeek uses ｜ (U+FF5C) and ▁ (U+2581) in token strings
+        // like <｜begin▁of▁sentence｜>. These are outside the GPT-2
+        // byte-to-char table and must pass through unchanged.
+        let result = dec.decode_chain(vec![
+            "<\u{FF5C}begin\u{2581}of\u{2581}sentence\u{FF5C}>".to_string(),
+        ]);
+        assert_eq!(result, vec!["<｜begin▁of▁sentence｜>"]);
     }
 }
