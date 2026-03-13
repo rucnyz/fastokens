@@ -19,13 +19,13 @@ The Python API lives in the `python` directory. To use `fastokens` as a drop-in 
 `fastokens` on average achieves a 10x+ faster tokenization compared to the `tokenizers` library.
 The gap widens as prompt sizes scale, as shown in the graphs below.
 
-![NVIDIA Nemotron buckets](assets/nvidia_nemotron_buckets_plots.png)
+![OSS Speedup on NVIDIA Grace](assets/speedup_oss_grace.png)
 
-![DeepSeek V3 buckets](assets/deepseekv3_buckets_plot.png)
+![Average Speedup](assets/speedup_average.png)
 
 Faster tokenization directly impacts live workloads. Tested using SGLang's benchmark suite, `fastokens` reduces time-to-first-token (TTFT) across prompt sizes:
 
-![sglang benchmark TTFT comparison](assets/sglang_benchmark_ttft_comparison.png)
+![TTFT P50 comparison](assets/ttft_p50.png)
 
 Note that `fastokens` is focused on inference and does not support all features of `tokenizers`.
 In particular, additional encoding outputs, and some normalizers/pretokenizers are not available.
