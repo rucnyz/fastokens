@@ -2,6 +2,11 @@
 name = "fastokens-python"
 version = "0.1.0"
 edition = "2024"
+description = ""
+license = "Apache-2.0"
+repository = "https://github.com/Atero-ai/fastokens"
+homepage = "https://github.com/Atero-ai/fastokens"
+documentation = "https://github.com/Atero-ai/fastokens/blob/main/README.md"
 
 [lib]
 name = "_native"
