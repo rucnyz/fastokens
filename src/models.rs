@@ -18,7 +18,7 @@ impl Model {
     /// automaton.
     pub fn from_config(config: ModelConfig) -> Result<Self> {
         match config {
-            ModelConfig::Bpe(bpe) => Ok(Self::Bpe(bpe)),
+            ModelConfig::Bpe(bpe) => Ok(Self::Bpe(*bpe)),
             other => {
                 let kind = ModelKind::from(&other);
                 Err(format!("unsupported model type: {kind}"))

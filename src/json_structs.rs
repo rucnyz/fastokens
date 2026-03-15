@@ -148,7 +148,7 @@ fn default_meta_replacement() -> char {
 pub enum ModelConfig {
     #[serde(rename = "BPE")]
     #[strum_discriminants(strum(to_string = "BPE"))]
-    Bpe(models::bpe::Bpe),
+    Bpe(Box<models::bpe::Bpe>),
     WordPiece {
         #[serde(default)]
         vocab: HashMap<String, u32>,

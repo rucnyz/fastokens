@@ -111,6 +111,11 @@ impl AddedTokens {
         self.id_to_content.len()
     }
 
+    /// Return whether there are no added tokens.
+    pub fn is_empty(&self) -> bool {
+        self.id_to_content.is_empty()
+    }
+
     /// Split `input` into segments: spans matching added tokens and spans of
     /// regular text.
     ///
@@ -128,11 +133,7 @@ impl AddedTokens {
             ),
             2 => self.split_prefilter(
                 input,
-                memchr::memchr2_iter(
-                    self.start_bytes[0],
-                    self.start_bytes[1],
-                    input.as_bytes(),
-                ),
+                memchr::memchr2_iter(self.start_bytes[0], self.start_bytes[1], input.as_bytes()),
             ),
             3 => self.split_prefilter(
                 input,
@@ -167,14 +168,14 @@ impl AddedTokens {
                 window_end += 1;
             }
             let window = &input[pos..window_end];
-            if let Some(m) = self.daac.leftmost_find_iter(window).next() {
-                if m.start() == 0 {
-                    if pos > prev_end {
-                        segments.push(Segment::Text(&input[prev_end..pos]));
-                    }
-                    segments.push(Segment::Token(m.value()));
-                    prev_end = pos + m.end();
+            if let Some(m) = self.daac.leftmost_find_iter(window).next()
+                && m.start() == 0
+            {
+                if pos > prev_end {
+                    segments.push(Segment::Text(&input[prev_end..pos]));
                 }
+                segments.push(Segment::Token(m.value()));
+                prev_end = pos + m.end();
             }
         }
 
