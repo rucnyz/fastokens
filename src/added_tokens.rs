@@ -134,29 +134,14 @@ impl AddedTokens {
     /// emitted as [`Segment::Token`]; the gaps between them as
     /// [`Segment::Text`].
     pub fn split<'a>(&self, input: &'a str) -> Vec<Segment<'a>> {
-        // When there are few distinct start bytes, use SIMD memchr to skip
-        // positions that cannot start any added token. This avoids scanning
-        // the full input through the Aho-Corasick automaton.
-        match self.start_bytes.len() {
-            1 => self.split_prefilter(
-                input,
-                memchr::memchr_iter(self.start_bytes[0], input.as_bytes()),
-            ),
-            2 => self.split_prefilter(
-                input,
-                memchr::memchr2_iter(self.start_bytes[0], self.start_bytes[1], input.as_bytes()),
-            ),
-            3 => self.split_prefilter(
-                input,
-                memchr::memchr3_iter(
-                    self.start_bytes[0],
-                    self.start_bytes[1],
-                    self.start_bytes[2],
-                    input.as_bytes(),
-                ),
-            ),
-            _ => self.split_full_scan(input),
-        }
+        // Always use the full DAAC scan. The Aho-Corasick automaton processes
+        // each byte exactly once (O(n)) and the automaton is tiny for typical
+        // added-token sets (~10-20 patterns). The previous memchr prefilter
+        // was faster for inputs where start bytes are rare, but caused severe
+        // regressions on chat templates and other inputs where start bytes
+        // (e.g. `<`) appear frequently — each hit triggered a per-candidate
+        // DAAC window scan that was far more expensive than a single pass.
+        self.split_full_scan(input)
     }
 
     /// Prefiltered split: only check positions identified by memchr.
