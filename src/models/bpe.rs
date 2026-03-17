@@ -1093,6 +1093,34 @@ impl Bpe {
             return Ok(());
         }
 
+        // Fast path for single-byte inputs (punctuation, ASCII chars).
+        // Skips all cache machinery — direct table lookup.
+        let bytes = raw_input.as_bytes();
+        if bytes.len() == 1 {
+            let id = self.byte_to_initial_token[bytes[0] as usize];
+            if id != INVALID_TOKEN {
+                out.push(id);
+                return Ok(());
+            }
+        }
+
+        // Fast path for 2-byte inputs: check pre-computed byte-pair merge table.
+        if bytes.len() == 2 {
+            let t1 = self.byte_to_initial_token[bytes[0] as usize];
+            let t2 = self.byte_to_initial_token[bytes[1] as usize];
+            if t1 != INVALID_TOKEN && t2 != INVALID_TOKEN {
+                let (rank, new_id) =
+                    self.byte_pair_initial[bytes[0] as usize * 256 + bytes[1] as usize];
+                if rank != u32::MAX {
+                    out.push(new_id);
+                } else {
+                    out.push(t1);
+                    out.push(t2);
+                }
+                return Ok(());
+            }
+        }
+
         let bpe_id = self.id;
         let hit = TL_FUSED_CACHE.with(|c| {
             let c = c.borrow();
@@ -1156,6 +1184,30 @@ impl Bpe {
                     let text = &buffer[split.range.clone()];
                     if text.is_empty() {
                         continue;
+                    }
+
+                    // Fast path for 1-2 byte splits (punctuation, ASCII chars).
+                    let tbytes = text.as_bytes();
+                    if tbytes.len() == 1 {
+                        let id = self.byte_to_initial_token[tbytes[0] as usize];
+                        if id != INVALID_TOKEN {
+                            out.push(id);
+                            continue;
+                        }
+                    } else if tbytes.len() == 2 {
+                        let t1 = self.byte_to_initial_token[tbytes[0] as usize];
+                        let t2 = self.byte_to_initial_token[tbytes[1] as usize];
+                        if t1 != INVALID_TOKEN && t2 != INVALID_TOKEN {
+                            let (rank, new_id) = self.byte_pair_initial
+                                [tbytes[0] as usize * 256 + tbytes[1] as usize];
+                            if rank != u32::MAX {
+                                out.push(new_id);
+                            } else {
+                                out.push(t1);
+                                out.push(t2);
+                            }
+                            continue;
+                        }
                     }
 
                     if cache.get(text, out) {
