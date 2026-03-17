@@ -301,14 +301,17 @@ impl Split {
                 let reuse_count = cache
                     .prev_matches
                     .partition_point(|&(_, end)| end <= common_len);
-                let restart = if reuse_count > 0 {
-                    cache.prev_matches[reuse_count - 1].1
+                // Drop the last reusable match: it may have been truncated
+                // by the previous input's end (e.g. regex matched " o"
+                // because text ended, but " of" with more context).
+                let safe_count = reuse_count.saturating_sub(1);
+                let restart = if safe_count > 0 {
+                    cache.prev_matches[safe_count - 1].1
                 } else {
                     0
                 };
-                // Take the cached vec to avoid cloning; truncate to reuse portion.
                 let mut m = std::mem::take(&mut cache.prev_matches);
-                m.truncate(reuse_count);
+                m.truncate(safe_count);
                 (m, restart)
             } else {
                 (Vec::new(), 0)
