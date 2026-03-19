@@ -653,6 +653,16 @@ impl PyTokenizer {
 
     // ── Decoding ──────────────────────────────────────────────────────
 
+    /// Decode a list of token strings back into text using the decoder pipeline.
+    ///
+    /// This is what `convert_tokens_to_string` needs: token strings (e.g.
+    /// "Ġhello") → decoded text (" hello").  The decoder (e.g. ByteLevel)
+    /// is applied exactly as during normal `decode`.
+    fn decode_tokens(&self, tokens: Vec<String>, py: Python<'_>) -> PyResult<String> {
+        py.allow_threads(|| self.inner.decode_tokens(tokens).map_err(|e| e.to_string()))
+            .map_err(PyValueError::new_err)
+    }
+
     /// Decode token IDs back into text.
     #[pyo3(signature = (ids, skip_special_tokens = false))]
     fn decode(

@@ -278,6 +278,18 @@ impl Tokenizer {
         }
     }
 
+    /// Decode a sequence of token strings back into text.
+    ///
+    /// Applies the decoder pipeline (e.g. ByteLevel → convert "Ġ" back to " ")
+    /// without going through the ID→string lookup.  When no decoder is
+    /// configured the tokens are concatenated with no separator.
+    pub fn decode_tokens(&self, tokens: Vec<String>) -> Result<String, Error> {
+        match &self.decoder {
+            Some(dec) => dec.decode(tokens).map_err(Error::Decoder),
+            None => Ok(tokens.join("")),
+        }
+    }
+
     /// Decode a batch of token ID sequences.
     pub fn decode_batch(
         &self,
@@ -308,10 +320,10 @@ impl Tokenizer {
     /// Added tokens are checked first (they shadow any BPE model entry with
     /// the same string), then the BPE model vocabulary.
     pub fn token_to_id(&self, token: &str) -> Option<u32> {
-        if let Some(ref at) = self.added_tokens {
-            if let Some(id) = at.token_to_id(token) {
-                return Some(id);
-            }
+        if let Some(ref at) = self.added_tokens
+            && let Some(id) = at.token_to_id(token)
+        {
+            return Some(id);
         }
         self.model.token_to_id(token)
     }
@@ -841,7 +853,12 @@ mod tests {
     fn token_to_id_searches_added_tokens() {
         let tok = Tokenizer::from_model("Qwen/Qwen3-0.6B").unwrap();
         // These tokens live in added_tokens, not the BPE model vocab.
-        for token in &["<|image_pad|>", "<|vision_start|>", "<|vision_end|>", "<|im_start|>"] {
+        for token in &[
+            "<|image_pad|>",
+            "<|vision_start|>",
+            "<|vision_end|>",
+            "<|im_start|>",
+        ] {
             let id = tok.token_to_id(token);
             assert!(id.is_some(), "token_to_id({token:?}) returned None");
             // Round-trip: the ID must decode back to the same string.

@@ -332,6 +332,14 @@ class _TokenizerShim:
         pass
 
     @property
+    def decoder(self):
+        return _DecoderShim(self._fast)
+
+    @decoder.setter
+    def decoder(self, value) -> None:
+        pass
+
+    @property
     def pre_tokenizer(self):
         return None
 
@@ -347,18 +355,31 @@ class _TokenizerShim:
     def post_processor(self, value) -> None:
         pass
 
-    @property
-    def decoder(self):
-        return None
 
-    @decoder.setter
-    def decoder(self, value) -> None:
-        pass
 
 
 # ---------------------------------------------------------------------------
 # Helper classes
 # ---------------------------------------------------------------------------
+
+class _DecoderShim:
+    """
+    Stand-in for ``tokenizers.decoders.Decoder``.
+
+    ``PreTrainedTokenizerFast.convert_tokens_to_string`` calls
+    ``self.backend_tokenizer.decoder.decode(tokens)`` when the decoder is not
+    None.  Without this shim it falls back to ``" ".join(tokens)``, which
+    leaves ByteLevel-encoded tokens (e.g. "Ġhello") undecoded in the output.
+    """
+
+    __slots__ = ("_fast",)
+
+    def __init__(self, fast) -> None:
+        self._fast = fast
+
+    def decode(self, tokens: list[str]) -> str:
+        return self._fast.decode_tokens(tokens)
+
 
 class _AddedTokenInfo:
     """Minimal stand-in for ``tokenizers.AddedToken``."""
