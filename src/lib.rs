@@ -700,19 +700,28 @@ mod tests {
         let text = " имущества";
         let hf_ids = hf.encode(text, false).unwrap().get_ids().to_vec();
         let our_ids = ours.encode(text).unwrap();
-        assert_eq!(our_ids, hf_ids,
-            "ignore_merges mismatch on {text:?}: ours={our_ids:?} hf={hf_ids:?}");
+        assert_eq!(
+            our_ids, hf_ids,
+            "ignore_merges mismatch on {text:?}: ours={our_ids:?} hf={hf_ids:?}"
+        );
 
         // Also test with random-token-decoded text (the benchmark pattern).
         let vocab_size = hf.get_vocab_size(false) as u64;
         let random_ids: Vec<u32> = (0..5000)
-            .map(|i| ((i as u64).wrapping_mul(6364136223846793005).wrapping_add(1) % vocab_size) as u32)
+            .map(|i| {
+                ((i as u64).wrapping_mul(6364136223846793005).wrapping_add(1) % vocab_size) as u32
+            })
             .collect();
         let text = hf.decode(&random_ids, true).unwrap();
         let hf_enc = hf.encode(text.as_str(), false).unwrap().get_ids().to_vec();
         let our_enc = ours.encode(&text).unwrap();
-        assert_eq!(our_enc, hf_enc,
-            "ignore_merges random-decode mismatch: {} vs {} tokens", our_enc.len(), hf_enc.len());
+        assert_eq!(
+            our_enc,
+            hf_enc,
+            "ignore_merges random-decode mismatch: {} vs {} tokens",
+            our_enc.len(),
+            hf_enc.len()
+        );
     }
 
     #[test]
