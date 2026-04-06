@@ -16,7 +16,13 @@ pub enum Error {
 #[derive(Debug)]
 pub enum Normalizer {
     Nfc(Nfc),
+    Replace { pattern: String, content: String },
     Sequence(Vec<Normalizer>),
+}
+
+/// Extract a plain string from a pattern Value like `{"String": "..."}`.
+fn extract_pattern_string(v: &serde_json::Value) -> Option<String> {
+    v.get("String").and_then(|s| s.as_str()).map(String::from)
 }
 
 impl Normalizer {
@@ -24,6 +30,11 @@ impl Normalizer {
     pub fn from_config(config: NormalizerConfig) -> Result<Self, Error> {
         match config {
             NormalizerConfig::Nfc => Ok(Self::Nfc(Nfc)),
+            NormalizerConfig::Replace { pattern, content } => {
+                let pat = extract_pattern_string(&pattern)
+                    .ok_or_else(|| Error::Unsupported("Replace with non-string pattern".into()))?;
+                Ok(Self::Replace { pattern: pat, content })
+            }
             NormalizerConfig::Sequence { normalizers } => {
                 let steps = normalizers
                     .into_iter()
@@ -46,6 +57,13 @@ impl Normalizer {
     pub fn normalize<'a>(&self, input: &'a str) -> Cow<'a, str> {
         match self {
             Self::Nfc(nfc) => nfc.normalize(input),
+            Self::Replace { pattern, content } => {
+                if input.contains(pattern.as_str()) {
+                    Cow::Owned(input.replace(pattern.as_str(), content.as_str()))
+                } else {
+                    Cow::Borrowed(input)
+                }
+            }
             Self::Sequence(steps) => {
                 let mut current = Cow::Borrowed(input);
                 for step in steps {

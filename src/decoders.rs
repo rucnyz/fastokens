@@ -11,10 +11,16 @@ pub enum Error {
     Unsupported(String),
 }
 
+/// Extract a plain string from a pattern Value like `{"String": "..."}`.
+fn extract_pattern_string(v: &serde_json::Value) -> Option<String> {
+    v.get("String").and_then(|s| s.as_str()).map(String::from)
+}
+
 /// A compiled decoder ready for use.
 #[derive(Debug)]
 pub enum Decoder {
     ByteLevel(ByteLevelDecoder),
+    Replace { pattern: String, content: String },
     Sequence(Vec<Decoder>),
 }
 
@@ -23,7 +29,13 @@ impl Decoder {
     pub fn from_config(config: DecoderConfig) -> Result<Self, Error> {
         match config {
             DecoderConfig::ByteLevel => Ok(Self::ByteLevel(ByteLevelDecoder)),
+            DecoderConfig::ByteFallback => Ok(Self::Sequence(vec![])), // identity/no-op
             DecoderConfig::Fuse => Ok(Self::Sequence(vec![])), // identity/no-op
+            DecoderConfig::Replace { pattern, content } => {
+                let pat = extract_pattern_string(&pattern)
+                    .ok_or_else(|| Error::Unsupported("Replace with non-string pattern".into()))?;
+                Ok(Self::Replace { pattern: pat, content })
+            }
             DecoderConfig::Sequence { decoders } => {
                 let steps = decoders
                     .into_iter()
@@ -44,12 +56,14 @@ impl Decoder {
 
     /// Apply this decoder step to a list of token strings, returning the
     /// transformed list.
-    ///
-    /// Follows HuggingFace's `decode_chain` semantics: each decoder step
-    /// transforms the token list, and the final result is joined.
     pub fn decode_chain(&self, tokens: Vec<String>) -> Result<Vec<String>, Error> {
         match self {
             Self::ByteLevel(bl) => Ok(bl.decode_chain(tokens)),
+            Self::Replace { pattern, content } => {
+                Ok(tokens.into_iter()
+                    .map(|t| t.replace(pattern.as_str(), content.as_str()))
+                    .collect())
+            }
             Self::Sequence(steps) => {
                 let mut current = tokens;
                 for step in steps {
